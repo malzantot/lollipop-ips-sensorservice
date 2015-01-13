@@ -72,6 +72,7 @@ class SensorService :
     // ISensorServer interface
     virtual Vector<Sensor> getSensorList();
     virtual sp<ISensorEventConnection> createSensorEventConnection();
+    virtual void reloadConfig();
     virtual status_t dump(int fd, const Vector<String16>& args);
 
     class SensorEventConnection : public BnSensorEventConnection, public LooperCallback {

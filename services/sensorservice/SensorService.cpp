@@ -20,6 +20,19 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 
+#include <fstream>
+#include <sstream>
+#include <sys/time.h>
+#include <time.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include "frameworks/native/services/sensorservice/FirewallConfigMessages.pb.h"
+#include "FirewallConfigUtils-inl.h"
+#include "PrivacyRules.h"
+#include "SensorPerturb.h"
+#include "frameworks/native/services/sensorservice/SensorCountMessages.pb.h"
+
 #include <cutils/properties.h>
 
 #include <utils/SortedVector.h>
@@ -51,7 +64,51 @@
 #include "SensorFusion.h"
 #include "SensorService.h"
 
+using namespace android_sensorfirewall;
+
 namespace android {
+// -------------------------------- ipShield
+SensorPerturb mSensorPerturb;
+PrivacyRules* mPrivacyRules = new PrivacyRules();
+
+void SensorService::reloadConfig()
+{
+    //TODO(krr): Only the root (uid=0) should be able to invoke this.
+    ALOGD("========   SensorService::reloadConfig   ========");
+
+    struct timeval tv, tv1;
+    FirewallConfig firewallConfig;
+
+    gettimeofday(&tv, NULL);
+    if (!ReadFirewallConfig(&firewallConfig)) {
+      ALOGE("Failed to load firewall config.");
+      return;
+    }
+    ParseFirewallConfigToHashTable(&firewallConfig, mPrivacyRules);
+    gettimeofday(&tv1, NULL);
+
+    double elapsed = (tv1.tv_sec - tv.tv_sec) + (tv1.tv_usec - tv.tv_usec) / 1000000.0;
+    ALOGD("elapsed time to load config=%lf", elapsed);
+
+    PrintFirewallConfig(firewallConfig);
+    ALOGD("========   reloadConfig DONE   ========");
+    ALOGD("Rule size=%d", mPrivacyRules->getConfigLength());
+    
+    //Testing HashTable
+    /*
+    ALOGD("======== Testing  ========");
+    if(mPrivacyRules->findRule(mPrivacyRules->generateKey(100025, 1, "com.facebook")))
+        mPrivacyRules->printTblEntry(mPrivacyRules->findRule(mPrivacyRules->generateKey(100025, 1, "com.facebook")));
+        //mPrivacyRules.printTblEntry(mPrivacyRules.findRule(mPrivacyRules.generateKey(100025, 1, "com.facebook")));
+    if(mPrivacyRules->findRule(mPrivacyRules->generateKey(100035, 2, "com.twitter")))
+        mPrivacyRules->printTblEntry(mPrivacyRules->findRule(mPrivacyRules->generateKey(100035, 2, "com.twitter")));
+    
+    //mPrivacyRules.printTblEntry(mPrivacyRules.findRule(mPrivacyRules.generateKey(10045, 3, "com.google")));
+    */
+}
+
+//////////////////////////////////////////////////////////////////////////////////
+
 // ---------------------------------------------------------------------------
 
 /*
@@ -62,6 +119,7 @@ namespace android {
  * - gravity sensor length is wrong (=> drift in linear-acc sensor)
  *
  */
+
 
 const char* SensorService::WAKE_LOCK_NAME = "SensorService";
 
