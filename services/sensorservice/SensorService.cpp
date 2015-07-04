@@ -67,7 +67,13 @@
 using namespace android_sensorfirewall;
 
 namespace android {
-// -------------------------------- ipShield
+// ---------------------------------------------------- ipShield
+
+double SensorService::total_time;
+double SensorService::last_time;
+int SensorService::count_perturb;
+unsigned int SensorService::print_limit;
+
 SensorPerturb mSensorPerturb;
 PrivacyRules* mPrivacyRules = new PrivacyRules();
 
@@ -107,6 +113,113 @@ void SensorService::reloadConfig()
     */
 }
 
+double getTime()
+{
+   struct timeval t;
+   struct timezone tzp;
+   gettimeofday(&t, &tzp);
+   return t.tv_sec + t.tv_usec*1e-6;
+}
+
+double getNextTime()
+{
+    return  getTime() + 1;
+}
+
+bool SensorService::is_empty(int index)
+{
+    if (!buffer[index].cnt)
+        return true;
+    else
+        return false;
+}
+
+bool SensorService::is_full(int index)
+{
+    if (buffer[index].cnt == QUEUE_LENGTH)
+        return true;
+    else
+        return false;
+}
+
+sensors_event_t SensorService::_deque(int index)
+{
+    sensors_event_t buf;
+    int &f = buffer[index].f;
+
+    buf = buffer[index].event_queue[f];
+    f = (f + 1) % QUEUE_LENGTH;
+    buffer[index].cnt--;
+
+    return buf;
+}
+
+bool SensorService::deque(int index, sensors_event_t &buf)
+{
+    if(is_empty(index))
+        return false;
+    buf = _deque(index);
+    return true;
+}
+
+// The idea here is that we 'll deque the sensor data but
+// will not increment the f pointer. The increment will
+// happen only if the data is consumed.
+bool SensorService::mod_deque(int index, sensors_event_t &buf)
+{
+    if(is_empty(index))
+        return false;
+
+    int f = buffer[index].f;
+    buf = buffer[index].event_queue[f];
+    return true;
+}
+
+void SensorService::_enque(sensors_event_t event)
+{
+    int &r = buffer[event.type].r;
+
+    buffer[event.type].event_queue[r] = event;
+    r = (r + 1) % QUEUE_LENGTH;
+    buffer[event.type].cnt++;
+}
+
+bool SensorService::enque(sensors_event_t event)
+{
+    if (is_full(event.type))
+        return false;
+    _enque(event);
+    return true;
+}
+
+int SensorService::pop_unused_perturb_buffer(sensors_event_t buf[])
+{
+    int i;
+    for (i = 0; i < NUMBER_OF_SENSORS; i++) {
+        if (buf[i].type != -1 && buf[i].reserved0 == 200)
+            deque(i, buf[i]);
+    }
+    return 0;
+}
+
+int SensorService::copy_perturb_buffer(sensors_event_t buf[])
+{
+    int i;
+    for (i = 0; i < NUMBER_OF_SENSORS; i++) {
+//      if (deque(i, buf[i]) == false)
+        if (mod_deque(i, buf[i]) == false)
+            buf[i].type = -1;
+        else {
+            buf[i].reserved0 = 100;
+            ALOGD("IPS:cp timestamp %lld type %d float values =%f %f %f",
+                    buf[i].timestamp, buf[i].type,
+                    buf[i].data[0], buf[i].data[1], buf[i].data[2]);
+        }
+    }
+    return 0;
+}
+
+
 //////////////////////////////////////////////////////////////////////////////////
 
 // ---------------------------------------------------------------------------
@@ -127,6 +240,23 @@ SensorService::SensorService()
     : mInitCheck(NO_INIT), mSocketBufferSize(SOCKET_BUFFER_SIZE_NON_BATCHED),
       mWakeLockAcquired(false)
 {
+    struct stat buf;
+    int ret;
+
+    // Initialize the queue
+    for (int i = 0; i < NUMBER_OF_SENSORS; i++) {
+        buffer[i].f = 0;
+        buffer[i].r = 0;
+        buffer[i].cnt = 0;
+    }
+    nextTime = getNextTime();
+
+    ret = stat(TRUSTED_FILE_STORE, &buf);
+    if (ret < 0)
+        mtime = buf.st_mtime;
+    else
+        mtime = 0;
+    *trusted_pkgname = '\0';
 }
 
 void SensorService::onFirstRef()
@@ -253,6 +383,12 @@ void SensorService::onFirstRef()
             run("SensorService", PRIORITY_URGENT_DISPLAY);
         }
     }
+
+    // init counter in SensorPerturb
+    mSensorPerturb.initCounter();
+    total_time = 0;
+    last_time = 0;
+    count_perturb = 0;
 }
 
 Sensor SensorService::registerSensor(SensorInterface* s)
@@ -267,7 +403,7 @@ Sensor SensorService::registerSensor(SensorInterface* s)
     mSensorMap.add(sensor.getHandle(), s);
     // create an entry in the mLastEventSeen array
     mLastEventSeen.add(sensor.getHandle(), event);
-
+    // Moustafa: check if ipShield removes the return statement ?
     return sensor;
 }
 
@@ -444,6 +580,10 @@ bool SensorService::threadLoop()
     SensorDevice& device(SensorDevice::getInstance());
     const size_t vcount = mVirtualSensorList.size();
 
+    sensors_event_t pbuf[NUMBER_OF_SENSORS];
+    int mycnt = 0;
+
+
     SensorEventAckReceiver sender(this);
     sender.run("SensorEventAckReceiver", PRIORITY_URGENT_DISPLAY);
     const int halVersion = device.getHalDeviceVersion();
@@ -561,6 +701,9 @@ bool SensorService::threadLoop()
             }
         }
 
+        //make a copy of the perturbed buffer
+        copy_perturb_buffer(pbuf);
+
         // Send our events to clients. Check the state of wake lock for each client and release the
         // lock if none of the clients need it.
         bool needsWakeLock = false;
@@ -568,8 +711,9 @@ bool SensorService::threadLoop()
         for (size_t i=0 ; i < numConnections; ++i) {
             if (activeConnections[i] != 0) {
                 activeConnections[i]->sendEvents(mSensorEventBuffer, count, mSensorEventScratch,
-                        mMapFlushEventsToConnections);
+                        mMapFlushEventsToConnections, false, pbuf);
                 needsWakeLock |= activeConnections[i]->needsWakeLock();
+		// Moustafa: How to handle the one-shot sensors ?!!!
                 // If the connection has one-shot sensors, it may be cleaned up after first trigger.
                 // Early check for one-shot sensors.
                 if (activeConnections[i]->hasOneShotSensors()) {
@@ -583,6 +727,10 @@ bool SensorService::threadLoop()
             release_wake_lock(WAKE_LOCK_NAME);
             mWakeLockAcquired = false;
         }
+
+        // remove only those elements from the playback buffer that were used.
+        pop_unused_perturb_buffer(pbuf);
+
     } while (!Thread::exitPending());
 
     ALOGW("Exiting SensorService::threadLoop => aborting...");
@@ -1046,8 +1194,9 @@ SensorService::SensorRecord::getFirstPendingFlushConnection() {
 SensorService::SensorEventConnection::SensorEventConnection(
         const sp<SensorService>& service, uid_t uid)
     : mService(service), mUid(uid), mWakeLockRefCount(0), mHasLooperCallbacks(false),
-      mDead(false), mEventCache(NULL), mCacheSize(0), mMaxCacheSize(0) {
+      mDead(false), mEventCache(NULL), mCacheSize(0), mMaxCacheSize(0), mPkgName(SensorService::SensorEventConnection::readPkgName()) {
     mChannel = new BitTube(mService->mSocketBufferSize);
+    ALOGD("Adding a new connection %ld:%s", uid, mPkgName);
 #if DEBUG_CONNECTIONS
     mEventsReceived = mEventsSentFromCache = mEventsSent = 0;
     mTotalAcksNeeded = mTotalAcksReceived = 0;
@@ -1107,6 +1256,38 @@ bool SensorService::SensorEventConnection::addSensor(int32_t handle) {
     }
     return false;
 }
+
+const char* SensorService::SensorEventConnection::readPkgName() {
+    char* pkgName;
+    char* fileName;
+    int size = 0;
+    std::ostringstream s;
+    s << IPCThreadState::self()->getCallingPid();
+    fileName = new char[strlen("/proc/") + strlen(s.str().c_str()) + strlen("/cmdline") + 1];
+    strcpy(fileName, "/proc/");
+    strcat(fileName, s.str().c_str());
+    strcat(fileName, "/cmdline");
+
+    std::ifstream file (fileName, std::ios::in | std::ios::binary | std::ios::ate );
+    if (file.is_open()) {
+        char c;
+        while ((c = file.get()) != file.eof()) {
+            size++;
+        }
+        pkgName = new char[size + 1];
+        file.seekg(0, std::ios::beg);
+        file.read(pkgName, size);
+        pkgName[size] = '\0';
+        //ALOGD("pkgName read is %s\n", pkgName);
+        file.close();
+    }
+    else {
+        ALOGD("Unable to open %s file for reading pkgName", fileName);;
+        pkgName = NULL;
+    }
+    return pkgName;
+}
+
 
 bool SensorService::SensorEventConnection::removeSensor(int32_t handle) {
     Mutex::Autolock _l(mConnectionLock);
@@ -1209,7 +1390,9 @@ void SensorService::SensorEventConnection::incrementPendingFlushCount(int32_t ha
 status_t SensorService::SensorEventConnection::sendEvents(
         sensors_event_t const* buffer, size_t numEvents,
         sensors_event_t* scratch,
-        SensorEventConnection const * const * mapFlushEventsToConnections) {
+        SensorEventConnection const * const * mapFlushEventsToConnections,
+	bool flip, sensors_event_t *pbuf) {
+    double time_now = getTime();
     // filter out events not for this connection
     size_t count = 0;
     Mutex::Autolock _l(mConnectionLock);
@@ -1274,6 +1457,13 @@ status_t SensorService::SensorEventConnection::sendEvents(
         scratch = const_cast<sensors_event_t *>(buffer);
         count = numEvents;
     }
+
+    // Check to exclude system service. Will do it in ruleApp.
+    //if(getUid() >= 10000) { 
+    count_perturb++;
+    count = mSensorPerturb.transformData(getUid(), getPkgName(), scratch, count, mPrivacyRules, pbuf);
+    //mSensorPerturb.transformData(getUid(), getPkgName(), scratch, count, mPrivacyRules, pbuf);
+    //}
 
     sendPendingFlushEventsLocked();
     // Early return if there are no events for this connection.
@@ -1351,6 +1541,7 @@ status_t SensorService::SensorEventConnection::sendEvents(
         // Add this file descriptor to the looper to get a callback when this fd is available for
         // writing.
         updateLooperRegistrationLocked(mService->getLooper());
+
         return size;
     }
 
@@ -1359,6 +1550,12 @@ status_t SensorService::SensorEventConnection::sendEvents(
         mEventsSent += count;
     }
 #endif
+    // Moustafa : 
+    double time_after = getTime();
+    total_time += (time_after - time_now);
+    if (count_perturb % 100 == 0) {
+        ALOGD("count=%d, avg time=%lf", count_perturb, (total_time / count_perturb));
+    }
 
     return size < 0 ? status_t(size) : status_t(NO_ERROR);
 }

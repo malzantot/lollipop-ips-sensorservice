@@ -45,6 +45,11 @@
 // For older HALs which don't support batching, use a smaller socket buffer size.
 #define SOCKET_BUFFER_SIZE_NON_BATCHED 4 * 1024
 
+#define NUMBER_OF_SENSORS   16
+#define QUEUE_LENGTH        20
+#define TRUSTED_FILE_STORE "/data/data/com.android.settings/pkgName.txt"
+
+
 struct sensors_poll_device_t;
 struct sensors_module_t;
 
@@ -56,6 +61,11 @@ class SensorService :
         public BnSensorServer,
         protected Thread
 {
+//------------------------ ipShield
+   char trusted_pkgname[80];
+   double nextTime;
+   time_t mtime;
+////////////////////////////////////
     friend class BinderService<SensorService>;
 
     static const char* WAKE_LOCK_NAME;
@@ -135,6 +145,7 @@ class SensorService :
         sp<SensorService> const mService;
         sp<BitTube> mChannel;
         uid_t mUid;
+        const char* mPkgName;
         mutable Mutex mConnectionLock;
         // Number of events from wake up sensors which are still pending and haven't been delivered
         // to the corresponding application. It is incremented by one unit for each write to the
@@ -174,7 +185,8 @@ class SensorService :
 
         status_t sendEvents(sensors_event_t const* buffer, size_t count,
                 sensors_event_t* scratch,
-                SensorEventConnection const * const * mapFlushEventsToConnections = NULL);
+                SensorEventConnection const * const * mapFlushEventsToConnections = NULL,
+		bool flip=false, sensors_event_t* pbuf=NULL);
         bool hasSensor(int32_t handle) const;
         bool hasAnySensor() const;
         bool hasOneShotSensors() const;
@@ -185,6 +197,10 @@ class SensorService :
         bool needsWakeLock();
 
         uid_t getUid() const { return mUid; }
+
+        const char* readPkgName();
+        const char* getPkgName() const { return mPkgName; }
+
     };
 
     class SensorRecord {
@@ -261,6 +277,8 @@ class SensorService :
     // The size of this vector is constant, only the items are mutable
     KeyedVector<int32_t, sensors_event_t> mLastEventSeen;
 
+    sensors_event_t _deque(int index);
+    void _enque(sensors_event_t event);
 public:
     void cleanupConnection(SensorEventConnection* connection);
     status_t enable(const sp<SensorEventConnection>& connection, int handle,
@@ -268,6 +286,25 @@ public:
     status_t disable(const sp<SensorEventConnection>& connection, int handle);
     status_t setEventRate(const sp<SensorEventConnection>& connection, int handle, nsecs_t ns);
     status_t flushSensor(const sp<SensorEventConnection>& connection);
+
+    static double total_time;
+    static double last_time;
+    static int count_perturb;
+    static unsigned int print_limit;
+    struct {
+        sensors_event_t event_queue[QUEUE_LENGTH];
+        int f, r, cnt;
+    } buffer[NUMBER_OF_SENSORS];
+    int copy_perturb_buffer(sensors_event_t buf[]);
+    int pop_unused_perturb_buffer(sensors_event_t buf[]);
+private:
+    bool enque(sensors_event_t event);
+    bool deque(int index, sensors_event_t &buf);
+    bool is_full(int index);
+    bool is_empty(int index);
+    bool mod_deque(int index, sensors_event_t &buf);
+
+
 };
 
 // ---------------------------------------------------------------------------
