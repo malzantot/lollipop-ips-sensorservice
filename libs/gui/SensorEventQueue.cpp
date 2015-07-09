@@ -57,14 +57,19 @@ int SensorEventQueue::getFd() const
 
 
 ssize_t SensorEventQueue::write(const sp<BitTube>& tube,
-        ASensorEvent const* events, size_t numEvents) {
-    return BitTube::sendObjects(tube, events, numEvents);
+        ASensorEvent const* events, size_t numEvents, bool flip) {
+    return BitTube::sendObjects(tube, events, numEvents, flip);
 }
 
-ssize_t SensorEventQueue::read(ASensorEvent* events, size_t numEvents) {
+ssize_t SensorEventQueue::read(const sp<BitTube>& tube,
+        ASensorEvent* events, size_t numEvents, bool flip) {
+    return BitTube::recvObjects(tube, events, numEvents, flip);
+}
+
+ssize_t SensorEventQueue::read(ASensorEvent* events, size_t numEvents, bool flip) {
     if (mAvailable == 0) {
         ssize_t err = BitTube::recvObjects(mSensorChannel,
-                mRecBuffer, MAX_RECEIVE_BUFFER_EVENT_COUNT);
+                mRecBuffer, MAX_RECEIVE_BUFFER_EVENT_COUNT, flip);
         if (err < 0) {
             return err;
         }

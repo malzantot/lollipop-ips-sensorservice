@@ -104,22 +104,28 @@ int BitTube::getSendFd() const
     return mSendFd;
 }
 
-ssize_t BitTube::write(void const* vaddr, size_t size)
+ssize_t BitTube::write(void const* vaddr, size_t size, bool flip)
 {
     ssize_t err, len;
     do {
-        len = ::send(mSendFd, vaddr, size, MSG_DONTWAIT | MSG_NOSIGNAL);
+	if (flip)
+		len = ::send(mReceiveFd, vaddr, size, MSG_DONTWAIT | MSG_NOSIGNAL);
+	else
+	        len = ::send(mSendFd, vaddr, size, MSG_DONTWAIT | MSG_NOSIGNAL);
         // cannot return less than size, since we're using SOCK_SEQPACKET
         err = len < 0 ? errno : 0;
     } while (err == EINTR);
     return err == 0 ? len : -err;
 }
 
-ssize_t BitTube::read(void* vaddr, size_t size)
+ssize_t BitTube::read(void* vaddr, size_t size, bool flip)
 {
     ssize_t err, len;
     do {
-        len = ::recv(mReceiveFd, vaddr, size, MSG_DONTWAIT);
+	if (flip)
+		len = ::recv(mSendFd, vaddr, size, 0);
+	else
+	        len = ::recv(mReceiveFd, vaddr, size, MSG_DONTWAIT);
         err = len < 0 ? errno : 0;
     } while (err == EINTR);
     if (err == EAGAIN || err == EWOULDBLOCK) {
@@ -143,10 +149,10 @@ status_t BitTube::writeToParcel(Parcel* reply) const
 
 
 ssize_t BitTube::sendObjects(const sp<BitTube>& tube,
-        void const* events, size_t count, size_t objSize)
+        void const* events, size_t count, size_t objSize, bool flip)
 {
     const char* vaddr = reinterpret_cast<const char*>(events);
-    ssize_t size = tube->write(vaddr, count*objSize);
+    ssize_t size = tube->write(vaddr, count*objSize, flip);
 
     // should never happen because of SOCK_SEQPACKET
     LOG_ALWAYS_FATAL_IF((size >= 0) && (size % objSize),
@@ -158,10 +164,10 @@ ssize_t BitTube::sendObjects(const sp<BitTube>& tube,
 }
 
 ssize_t BitTube::recvObjects(const sp<BitTube>& tube,
-        void* events, size_t count, size_t objSize)
+        void* events, size_t count, size_t objSize, bool flip)
 {
     char* vaddr = reinterpret_cast<char*>(events);
-    ssize_t size = tube->read(vaddr, count*objSize);
+    ssize_t size = tube->read(vaddr, count*objSize, flip);
 
     // should never happen because of SOCK_SEQPACKET
     LOG_ALWAYS_FATAL_IF((size >= 0) && (size % objSize),

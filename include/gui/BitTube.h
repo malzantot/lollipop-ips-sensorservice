@@ -54,16 +54,16 @@ public:
     // send objects (sized blobs). All objects are guaranteed to be written or the call fails.
     template <typename T>
     static ssize_t sendObjects(const sp<BitTube>& tube,
-            T const* events, size_t count) {
-        return sendObjects(tube, events, count, sizeof(T));
+            T const* events, size_t count, bool flip=false) {
+        return sendObjects(tube, events, count, sizeof(T), flip);
     }
 
     // receive objects (sized blobs). If the receiving buffer isn't large enough,
     // excess messages are silently discarded.
     template <typename T>
     static ssize_t recvObjects(const sp<BitTube>& tube,
-            T* events, size_t count) {
-        return recvObjects(tube, events, count, sizeof(T));
+            T* events, size_t count, bool flip=false) {
+        return recvObjects(tube, events, count, sizeof(T), flip);
     }
 
     // parcels this BitTube
@@ -73,20 +73,20 @@ private:
     void init(size_t rcvbuf, size_t sndbuf);
 
     // send a message. The write is guaranteed to send the whole message or fail.
-    ssize_t write(void const* vaddr, size_t size);
+    ssize_t write(void const* vaddr, size_t size, bool flip = false);
 
     // receive a message. the passed buffer must be at least as large as the
     // write call used to send the message, excess data is silently discarded.
-    ssize_t read(void* vaddr, size_t size);
+    ssize_t read(void* vaddr, size_t size, bool flip = false);
 
     int mSendFd;
     mutable int mReceiveFd;
 
     static ssize_t sendObjects(const sp<BitTube>& tube,
-            void const* events, size_t count, size_t objSize);
+            void const* events, size_t count, size_t objSize, bool flip=false);
 
     static ssize_t recvObjects(const sp<BitTube>& tube,
-            void* events, size_t count, size_t objSize);
+            void* events, size_t count, size_t objSize, bool flip=false);
 };
 
 // ----------------------------------------------------------------------------
