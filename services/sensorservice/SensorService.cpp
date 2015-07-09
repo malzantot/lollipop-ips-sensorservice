@@ -219,6 +219,114 @@ int SensorService::copy_perturb_buffer(sensors_event_t buf[])
     return 0;
 }
 
+int
+sensor_dup(sensors_event_t *event, ASensorEvent aevent)
+{
+    int i;
+
+    if (!event)
+        return -1;
+
+    event->version = aevent.version;
+    event->sensor  = aevent.sensor;
+    event->type    = aevent.type;
+    event->reserved0 = aevent.reserved0;
+    event->timestamp = aevent.timestamp;
+
+    for (i = 0; i < 16; i++)
+        event->data[i] = aevent.data[i];
+
+    for (i = 0; i < 4; i++)
+        event->reserved1[i] = aevent.reserved1[i];
+    return 0;
+}
+
+SortedVector< wp<SensorService::SensorEventConnection> >
+SensorService::getActiveConnections() const
+{
+    Mutex::Autolock _l(mLock);
+    return mActiveConnections;
+}
+
+
+
+status_t SensorService::SensorEventConnection::recvEvents(sensors_event_t *event)
+{
+    ASensorEvent aevent = {0, };
+	// Moustafa : Uncomment after updating SensorEventQueue
+    ssize_t size = SensorEventQueue::read(mChannel, &aevent, 1, true);
+    if (size == 0)
+        return 1;
+    else if (size < 0)
+        return size;
+
+    sensor_dup(event, aevent);
+
+    return 0;
+}
+
+bool SensorService::threadLoop_pb()
+{
+    int ret = 0;
+    sensors_event_t event;
+    static int x = 0;
+    std::string pkgName;
+    struct stat buf;
+
+    double cur = getTime();
+    if (cur >= nextTime) {
+        nextTime = getNextTime();
+        ret = stat(TRUSTED_FILE_STORE, &buf);
+        if (ret < 0) {
+            *trusted_pkgname = '\0';
+            sleep(1);
+            return false;
+        }
+        if (mtime != buf.st_mtime) {
+            std::ifstream f(TRUSTED_FILE_STORE);
+            f >> pkgName;
+            if (pkgName.empty()) {
+                *trusted_pkgname = '\0';
+                ALOGD("IPS: trusted package name changed to none");
+            } else {
+                ALOGD("IPS: trusted package name: %s", pkgName.data());
+                pkgName.copy(trusted_pkgname, pkgName.length());
+                trusted_pkgname[pkgName.length()] = '\0';
+            }
+            mtime = buf.st_mtime;
+        }
+    }
+
+    if (!*trusted_pkgname) {
+        sleep(1);
+        return false;
+    }
+
+    // receive our events to clients...
+    const SortedVector< wp<SensorEventConnection> > activeConnections(
+            getActiveConnections());
+    size_t numConnections = activeConnections.size();
+    for (size_t i=0 ; i<numConnections ; i++) {
+        sp<SensorEventConnection> connection(
+                activeConnections[i].promote());
+        if (connection != 0 &&
+                !strcmp(connection->getPkgName(), trusted_pkgname)) {
+            ret = connection->recvEvents(&event);
+            if (ret == 0) {
+                enque(event);
+                ALOGD("IPS:timestamp %lld type %d float values =%f %f %f",
+                        event.timestamp, event.type,
+                        event.data[0], event.data[1], event.data[2]);
+            } else if (ret < 0)
+                ALOGD("IPS: error %s", strerror(-ret));
+        }
+    }
+    print_limit++;
+    if (print_limit % 1000000000 == 0)
+        ALOGD("IPS: threadLoop_pb");
+    return true;
+}
+
 
 //////////////////////////////////////////////////////////////////////////////////
 
@@ -381,6 +489,8 @@ void SensorService::onFirstRef()
 
             mInitCheck = NO_ERROR;
             run("SensorService", PRIORITY_URGENT_DISPLAY);
+		// Moustafa : uncomment after adding run_pb
+            run_pb("SensorService_playback", PRIORITY_URGENT_DISPLAY);
         }
     }
 

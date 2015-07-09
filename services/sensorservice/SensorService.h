@@ -200,6 +200,8 @@ class SensorService :
 
         const char* readPkgName();
         const char* getPkgName() const { return mPkgName; }
+        status_t recvEvents(sensors_event_t *event);
+
 
     };
 
@@ -225,6 +227,8 @@ class SensorService :
         virtual bool threadLoop();
         SensorEventAckReceiver(const sp<SensorService>& service): mService(service) {}
     };
+
+    SortedVector< wp<SensorEventConnection> > getActiveConnections() const;
 
     String8 getSensorName(int handle) const;
     bool isVirtualSensor(int handle) const;
@@ -303,7 +307,7 @@ private:
     bool is_full(int index);
     bool is_empty(int index);
     bool mod_deque(int index, sensors_event_t &buf);
-
+    virtual bool threadLoop_pb();
 
 };
 
