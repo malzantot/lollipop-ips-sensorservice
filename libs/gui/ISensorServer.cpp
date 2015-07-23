@@ -35,6 +35,7 @@ namespace android {
 enum {
     GET_SENSOR_LIST = IBinder::FIRST_CALL_TRANSACTION,
     CREATE_SENSOR_EVENT_CONNECTION,
+    RELOAD_CONFIG,
 };
 
 class BpSensorServer : public BpInterface<ISensorServer>
@@ -67,6 +68,14 @@ public:
         data.writeInterfaceToken(ISensorServer::getInterfaceDescriptor());
         remote()->transact(CREATE_SENSOR_EVENT_CONNECTION, data, &reply);
         return interface_cast<ISensorEventConnection>(reply.readStrongBinder());
+    }
+
+    virtual void reloadConfig()
+    {
+        ALOGD("BpSensorServer::reloadConfig.");
+        Parcel data, reply;
+        data.writeInterfaceToken(ISensorServer::getInterfaceDescriptor());
+        remote()->transact(RELOAD_CONFIG, data, &reply);
     }
 };
 

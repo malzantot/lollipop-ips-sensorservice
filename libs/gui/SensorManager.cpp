@@ -157,5 +157,12 @@ sp<SensorEventQueue> SensorManager::createEventQueue()
     return queue;
 }
 
+void SensorManager::reloadConfig() {
+    ALOGD("SensorManager.cpp::reloadConfig");
+    if (assertStateLocked() == NO_ERROR) {
+        mSensorServer->reloadConfig();
+    }
+}
+
 // ----------------------------------------------------------------------------
 }; // namespace android

@@ -64,8 +64,8 @@ public:
             ASensorEvent* events, size_t numEvents, bool flip=false);
 
     ssize_t read(ASensorEvent* events, size_t numEvents, bool flip=false);
+    ssize_t write(ASensorEvent const* events, size_t numEvents, bool flip=false);
     
-   // Moustafa ? should we add another two methdos here ?
 
     status_t waitForEvent() const;
     status_t wake() const;
